@@ -4,25 +4,23 @@
 import PackageDescription
 
 let package = Package(
-    name: "SubtitleMerger",
+    name: "m3u8-subtitle-provider",
+	platforms: [.iOS(.v15), .macOS(.v12), .tvOS(.v15)],
     products: [
-        // Products define the executables and libraries a package produces, and make them visible to other packages.
         .library(
-            name: "SubtitleMerger",
-            targets: ["SubtitleMerger"]),
+            name: "SubtitleProvider",
+            targets: ["SubtitleProvider"]
+		),
     ],
-    dependencies: [
-        // Dependencies declare other packages that this package depends on.
-        // .package(url: /* package url */, from: "1.0.0"),
-    ],
+	dependencies: [
+	  .package(url: "https://github.com/apple/swift-nio.git", from: "2.38.0"),
+	],
     targets: [
-        // Targets are the basic building blocks of a package. A target can define a module or a test suite.
-        // Targets can depend on other targets in this package, and on products in packages this package depends on.
         .target(
-            name: "SubtitleMerger",
-            dependencies: []),
-        .testTarget(
-            name: "SubtitleMergerTests",
-            dependencies: ["SubtitleMerger"]),
+            name: "SubtitleProvider",
+            dependencies: [
+				.product(name: "NIOHTTP1", package: "swift-nio"),
+			]
+		),
     ]
 )
