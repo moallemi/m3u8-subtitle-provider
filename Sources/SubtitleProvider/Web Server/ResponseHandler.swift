@@ -14,47 +14,48 @@ final class ResponseHandler: ChannelInboundHandler {
 	
 	func channelRead(context: ChannelHandlerContext, data: NIOAny) {
 		let part = unwrapInboundIn(data)
-		
-		guard case let .head(head) = part else { return }
-		
-		let fileNames = (try? FileManager.default.contentsOfDirectory(
-			atPath: FileManager.default.urlForCachesDirectory().path
-		)) ?? []
+
+		var response = Data()
+
+		guard case let .head(head) = part else {
+			return
+		}
 		
 		// replacing random query string
-		let cleanUri = head.uri.replacingOccurrences(of: "(\\?.*)$", with: "", options: .regularExpression, range: nil)
-		
-		print("SERVER: \(cleanUri)")
-		
-		var response = Data()
-		
-		for name in fileNames where cleanUri.contains(name) {
-			response = FileManager.default.contents(
-				
-				atPath: FileManager.default
-					.urlForCachesDirectory()
-					.appendingPathComponent(name)
-					.path
-			) ?? Data()
-			break
+		var urlComponents = URLComponents(string: head.uri)
+		urlComponents?.queryItems = nil
+		guard let cleanURL = urlComponents?.url else {
+			outputResponse(response, context: context)
+			return
 		}
-		
-		if response.isEmpty {
-			let content = "Invalid path"
-			response = content.data(using: .utf8) ?? Data()
-		}
-		
-		// set the headers
+
+		print("[GET]: \(cleanURL)")
+
+		response = FileManager.default.contents(
+			atPath: FileManager.default.urlForCachesDirectory().appendingPathComponent(cleanURL.path).path
+		) ?? Data()
+
+		outputResponse(response, context: context)
+	}
+
+	private func outputResponse(_ data: Data, context: ChannelHandlerContext) {
 		var headers = HTTPHeaders()
 		headers.add(name: "Content-Type", value: "text/plain; charset=utf-8")
-		headers.add(name: "Content-Length", value: "\(response.count)")
-		
-		let responseHead = HTTPResponseHead(version: .init(major: 1, minor: 1), status: .ok, headers: headers)
+		headers.add(name: "Content-Length", value: "\(data.count)")
+
+		let status: HTTPResponseStatus
+
+		if data.isEmpty {
+			status = .noContent
+		} else {
+			status = .ok
+		}
+
+		let responseHead = HTTPResponseHead(version: .init(major: 1, minor: 1), status: status, headers: headers)
 		context.write(wrapOutboundOut(.head(responseHead)), promise: nil)
-		
-		// Set the data
-		var buffer = context.channel.allocator.buffer(capacity: response.count)
-		buffer.writeBytes(response)
+
+		var buffer = context.channel.allocator.buffer(capacity: data.count)
+		buffer.writeBytes(data)
 		let body = HTTPServerResponsePart.body(.byteBuffer(buffer))
 		context.writeAndFlush(wrapOutboundOut(body), promise: nil)
 		context.close(promise: nil)

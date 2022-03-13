@@ -21,34 +21,43 @@ public final class SubtitleProvider {
 		serverStartWorkItem.cancel()
 	}
 	
-	public func m3u8WithSubtitles(_ subtitles: [Subtitle], originalM3U8: String) async -> String {
+	public func m3u8WithSubtitles(
+		_ subtitles: [Subtitle],
+		originalM3U8: String,
+		id: String = UUID().uuidString
+	) async -> String {
 		guard !subtitles.isEmpty else { return originalM3U8 }
 
-		await downloadFile(originalM3U8, saveTo: "original.m3u8")
-		
-		var processedLines = processOriginalM3U8(originalM3U8)
+		guard let downloadedFile = await downloadFile(from: originalM3U8, saveTo: "original.m3u8", in: id) else {
+			return originalM3U8
+		}
+
+		var processedLines = processM3U8(originalURL: originalM3U8, downloadedFileURL: downloadedFile)
 		
 		for subtitle in subtitles {
-			await downloadFile(subtitle.url, saveTo: "\(subtitle.languageCode).txt")
-			processedLines.append("""
+			if let subtitleFileURL = await downloadFile(from: subtitle.url, saveTo: "\(subtitle.languageCode).txt", in: id) {
+				processedLines.append("""
    #EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",LANGUAGE="\(subtitle.languageCode)",NAME="\(subtitle.languageName)",AUTOSELECT=\(subtitle.isDefault ? "YES" : "NO"),DEFAULT=\(subtitle.isDefault ? "YES" : "NO"),URI="sub-\(subtitle.languageCode).m3u8"
    """)
-			convertToVTT(srtFileName: "\(subtitle.languageCode).txt")
-			buildM3U8SubtitleForLanguage(subtitle.languageCode)
+				convertToVTT(srtFileURL: subtitleFileURL)
+				buildM3U8SubtitleForLanguage(subtitle.languageCode, srtFileURL: subtitleFileURL)
+			} else {
+				continue
+			}
 		}
 				
-		saveContent(processedLines.joined(separator: "\r"), to: "merged.m3u8")
-		
-		return "http://\(host):\(port)/merged.m3u8?\(UUID().uuidString)"
+		saveContent(processedLines.joined(separator: "\r"), to: "merged.m3u8", in: id)
+
+		return "http://\(host):\(port)/\(id)/merged.m3u8?\(UUID().uuidString)"
 	}
 	
-	private func processOriginalM3U8(_ originalUrl: String) -> [String] {
-		let lastIndex = originalUrl.index(after: originalUrl.lastIndex(of: "/")!)
-		let baseURL = originalUrl[..<lastIndex]
+	private func processM3U8(originalURL: String, downloadedFileURL: URL) -> [String] {
+		let lastIndex = originalURL.index(after: originalURL.lastIndex(of: "/")!)
+		let baseURL = originalURL[..<lastIndex]
 		
-		let fileURL = FileManager.default.urlForCachesDirectory().appendingPathComponent("original.m3u8")
+		let fileURL = downloadedFileURL
 		let content = try? String(contentsOf: fileURL, encoding: .utf8)
-		let lines = content!.components(separatedBy: .newlines)
+		let lines = content?.components(separatedBy: .newlines) ?? []
 		var processedLines = [String]()
 		for line in lines {
 			if line.starts(with: "#EXT-X-STREAM-INF") {
@@ -63,29 +72,43 @@ public final class SubtitleProvider {
 		}
 		return processedLines
 	}
-	
-	private func downloadFile(_ filePath: String, saveTo fileName: String) async {
+
+	@discardableResult
+	private func downloadFile(from url: String, saveTo fileName: String, in directory: String) async -> URL? {
 		do {
-			let (data, _) = try await URLSession.shared.download(from: URL(string: filePath)!)
-			saveContent(try String(contentsOf: data), to: fileName)
+			let (data, _) = try await URLSession.shared.download(from: URL(string: url)!)
+			return saveContent(try String(contentsOf: data), to: fileName, in: directory)
 		} catch {
-			print("Unexpected error: \(error.localizedDescription).")
+			print("Failed to download file from \(url): \(error.localizedDescription).")
 		}
+		return nil
 	}
-	
-	private func saveContent(_ contents: String, to fileName: String) {
-		let filename = FileManager.default.urlForCachesDirectory().appendingPathComponent(fileName)
-		
+
+	@discardableResult
+	private func saveContent(_ contents: String, to fileName: String, in directory: String) -> URL? {
+		let directoryURL = FileManager.default.urlForCachesDirectory().appendingPathComponent(directory)
+
+		if !FileManager.default.fileExists(atPath: directoryURL.absoluteString) {
+			do {
+				try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true, attributes: nil)
+			} catch {
+				print("Unable to create directory: \(directoryURL).\n\(error.localizedDescription)")
+			}
+		}
+
 		do {
-			try contents.write(to: filename, atomically: true, encoding: String.Encoding.utf8)
+			let fileURL = directoryURL.appendingPathComponent(fileName)
+			try contents.write(to: fileURL, atomically: true, encoding: .utf8)
+			return fileURL
 		} catch {
-			print("Unexpected error: \(error).")
+			print("Unable to create file: \(fileName) in directory: \(directory).\n\(error.localizedDescription)")
 		}
+
+		return nil
 	}
 		
-	private func convertToVTT(srtFileName: String) {
-		let fileURL = FileManager.default.urlForCachesDirectory().appendingPathComponent(srtFileName)
-		let content = try? String(contentsOf: fileURL, encoding: .utf8)
+	private func convertToVTT(srtFileURL: URL) {
+		let content = try? String(contentsOf: srtFileURL, encoding: .utf8)
 		let lines = content!.components(separatedBy: "\n")
 		
 		var processedLines = [String]()
@@ -106,12 +129,16 @@ public final class SubtitleProvider {
 				processedLines.append(line)
 			}
 		}
-		saveContent(processedLines.joined(separator: "\n"), to: "\(srtFileName).vtt")
+
+		saveContent(
+			processedLines.joined(separator: "\n"),
+			to: srtFileURL.deletingPathExtension().appendingPathExtension("vtt").lastPathComponent,
+			in: srtFileURL.deletingLastPathComponent().lastPathComponent
+		)
 	}
 	
-	private func buildM3U8SubtitleForLanguage(_ languageCode: String) {
-		let fileURL = FileManager.default.urlForCachesDirectory().appendingPathComponent("\(languageCode).txt")
-		let content = try? String(contentsOf: fileURL, encoding: .utf8)
+	private func buildM3U8SubtitleForLanguage(_ languageCode: String, srtFileURL: URL) {
+		let content = try? String(contentsOf: srtFileURL, encoding: .utf8)
 		
 		guard
 			let timeParts = content?
@@ -136,9 +163,14 @@ public final class SubtitleProvider {
  #EXT-X-MEDIA-SEQUENCE:0
  #EXT-X-PLAYLIST-TYPE:VOD
  #EXTINF:\(duration)
- \(languageCode).txt.vtt
+ \(languageCode).vtt
  #EXT-X-ENDLIST
  """
-		saveContent(fileContent, to: "sub-\(languageCode).m3u8")
+
+		saveContent(
+			fileContent,
+			to: "sub-\(languageCode).m3u8",
+			in: srtFileURL.deletingLastPathComponent().lastPathComponent
+		)
 	}
 }

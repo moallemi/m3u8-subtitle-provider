@@ -12,7 +12,9 @@ final class Server {
 	
 	static func start(host: String, port: Int) {
 		do {
-			stop()
+			if group != nil {
+				return
+			}
 			let group = MultiThreadedEventLoopGroup(numberOfThreads: System.coreCount)
 			self.group = group
 			
