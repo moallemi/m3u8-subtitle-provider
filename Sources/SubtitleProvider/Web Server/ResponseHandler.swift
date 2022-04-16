@@ -9,55 +9,55 @@ import NIO
 import NIOHTTP1
 
 final class ResponseHandler: ChannelInboundHandler {
-	typealias InboundIn = HTTPServerRequestPart
-	typealias OutboundOut = HTTPServerResponsePart
-	
-	func channelRead(context: ChannelHandlerContext, data: NIOAny) {
-		let part = unwrapInboundIn(data)
+  typealias InboundIn = HTTPServerRequestPart
+  typealias OutboundOut = HTTPServerResponsePart
 
-		var response = Data()
+  func channelRead(context: ChannelHandlerContext, data: NIOAny) {
+    let part = unwrapInboundIn(data)
 
-		guard case let .head(head) = part else {
-			return
-		}
-		
-		// replacing random query string
-		var urlComponents = URLComponents(string: head.uri)
-		urlComponents?.queryItems = nil
-		guard let cleanURL = urlComponents?.url else {
-			outputResponse(response, context: context)
-			return
-		}
+    var response = Data()
 
-		print("[GET]: \(cleanURL)")
+    guard case let .head(head) = part else {
+      return
+    }
 
-		response = FileManager.default.contents(
-			atPath: FileManager.default.urlForCachesDirectory().appendingPathComponent(cleanURL.path).path
-		) ?? Data()
+    // replacing random query string
+    var urlComponents = URLComponents(string: head.uri)
+    urlComponents?.queryItems = nil
+    guard let cleanURL = urlComponents?.url else {
+      outputResponse(response, context: context)
+      return
+    }
 
-		outputResponse(response, context: context)
-	}
+    print("[GET]: \(cleanURL)")
 
-	private func outputResponse(_ data: Data, context: ChannelHandlerContext) {
-		var headers = HTTPHeaders()
-		headers.add(name: "Content-Type", value: "text/plain; charset=utf-8")
-		headers.add(name: "Content-Length", value: "\(data.count)")
+    response = FileManager.default.contents(
+      atPath: FileManager.default.urlForCachesDirectory().appendingPathComponent(cleanURL.path).path
+    ) ?? Data()
 
-		let status: HTTPResponseStatus
+    outputResponse(response, context: context)
+  }
 
-		if data.isEmpty {
-			status = .noContent
-		} else {
-			status = .ok
-		}
+  private func outputResponse(_ data: Data, context: ChannelHandlerContext) {
+    var headers = HTTPHeaders()
+    headers.add(name: "Content-Type", value: "text/plain; charset=utf-8")
+    headers.add(name: "Content-Length", value: "\(data.count)")
 
-		let responseHead = HTTPResponseHead(version: .init(major: 1, minor: 1), status: status, headers: headers)
-		context.write(wrapOutboundOut(.head(responseHead)), promise: nil)
+    let status: HTTPResponseStatus
 
-		var buffer = context.channel.allocator.buffer(capacity: data.count)
-		buffer.writeBytes(data)
-		let body = HTTPServerResponsePart.body(.byteBuffer(buffer))
-		context.writeAndFlush(wrapOutboundOut(body), promise: nil)
-		context.close(promise: nil)
-	}
+    if data.isEmpty {
+      status = .noContent
+    } else {
+      status = .ok
+    }
+
+    let responseHead = HTTPResponseHead(version: .init(major: 1, minor: 1), status: status, headers: headers)
+    context.write(wrapOutboundOut(.head(responseHead)), promise: nil)
+
+    var buffer = context.channel.allocator.buffer(capacity: data.count)
+    buffer.writeBytes(data)
+    let body = HTTPServerResponsePart.body(.byteBuffer(buffer))
+    context.writeAndFlush(wrapOutboundOut(body), promise: nil)
+    context.close(promise: nil)
+  }
 }
